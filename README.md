@@ -73,6 +73,17 @@ OpenPoke is a simplified, open-source take on [Interaction Company’s](https://
 
 The web app proxies API calls to the Python server using the values in `.env`, so keeping both processes running is required for end-to-end flows.
 
+## Tier 3 routing (optional)
+
+This fork can hand agent routing to the Agent Manager from [openpoke-agent-overload](https://github.com/youssefbriki1/openpoke-agent-overload). The Interaction Agent then stops listing every agent's name. The manager reuses the agent that owns the people, threads or reminders a task mentions, creates a new agent, or asks the user which person they meant.
+
+```bash
+pip install -e ..            # from the openpoke-agent-overload checkout this fork is a submodule of
+export OPENPOKE_ROUTER=tier3
+```
+
+Without `OPENPOKE_ROUTER=tier3` the server behaves exactly like upstream. The manager keeps its registry in memory (see `server/services/execution/agent_manager.py`).
+
 ## Project Layout
 - `server/` – FastAPI application and agents
 - `web/` – Next.js app
