@@ -5,9 +5,19 @@ from pathlib import Path
 from typing import Dict, List
 
 from ...services.execution import get_agent_roster
+from ...services.execution.agent_manager import tier3_enabled
 
 _prompt_path = Path(__file__).parent / "system_prompt.md"
 SYSTEM_PROMPT = _prompt_path.read_text(encoding="utf-8").strip()
+
+# Shown instead of the roster when the Agent Manager routes delegations (OPENPOKE_ROUTER=tier3)
+TIER3_ROUTING_NOTE = (
+    "Agents are routed automatically by the Agent Manager, so no roster is listed. Always call "
+    "send_message_to_agent with self-contained instructions that name the people, email threads, "
+    "bookings or reminders involved (e.g. 'Check whether Alice Chen replied about lunch'). The "
+    "manager reuses the agent that already owns that work or creates a new one; agent_name is only "
+    "the label of a new agent. If the result says needs_clarification, ask the user that question."
+)
 
 
 # Load and return the pre-defined system prompt from markdown file
@@ -43,6 +53,9 @@ def _render_conversation_history(transcript: str) -> str:
 
 # Format currently active execution agents into XML tags for LLM awareness
 def _render_active_agents() -> str:
+    if tier3_enabled():
+        return TIER3_ROUTING_NOTE
+
     roster = get_agent_roster()
     roster.load()
     agents = roster.get_agents()
