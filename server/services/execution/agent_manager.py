@@ -14,7 +14,7 @@ import itertools
 import os
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Callable, Dict, Optional
+from typing import Callable, Dict, List, Optional, Tuple
 
 from .log_store import _slugify
 
@@ -27,10 +27,13 @@ class Delegation:
     question: str = ""  # clarify only
 
 
-# (agent_name proposed by the IA, instructions) -> Delegation
-DelegationRouter = Callable[[str, str], Delegation]
+# (agent_name proposed by the IA, instructions, follow_up declared by the IA) -> Delegation
+DelegationRouter = Callable[[str, str, Optional[bool]], Delegation]
+# text of the current turn -> rendered cards of the agents most relevant to it
+CandidateProvider = Callable[[str], List[str]]
 
 _router: Optional[DelegationRouter] = None
+_candidates: Optional[CandidateProvider] = None
 _names: Dict[str, str] = {}  # manager agent_id -> execution-agent name
 
 
@@ -38,18 +41,28 @@ def tier3_enabled() -> bool:
     return _router is not None or os.getenv("OPENPOKE_ROUTER", "").strip().lower() == "tier3"
 
 
-def set_delegation_router(router: Optional[DelegationRouter]) -> None:
+def set_delegation_router(router: Optional[DelegationRouter], candidates: Optional[CandidateProvider] = None) -> None:
     """Install a router (tests, benchmarks) or ``None`` to go back to the env default."""
-    global _router
-    _router = router
+    global _router, _candidates
+    _router, _candidates = router, candidates
     _names.clear()
 
 
-def route_delegation(agent_name: str, instructions: str) -> Delegation:
-    global _router
+def _ensure_router() -> None:
+    global _router, _candidates
     if _router is None:
-        _router = _default_router()
-    return _router(agent_name, instructions)
+        _router, _candidates = _default_router()
+
+
+def route_delegation(agent_name: str, instructions: str, follow_up: Optional[bool] = None) -> Delegation:
+    _ensure_router()
+    return _router(agent_name, instructions, follow_up)
+
+
+def relevant_agents(text: str) -> List[str]:
+    """Cards of the few agents most relevant to ``text`` (shown to the IA instead of the roster)."""
+    _ensure_router()
+    return _candidates(text) if _candidates else []
 
 
 def execution_agent_name(delegation: Delegation) -> str:
@@ -67,7 +80,11 @@ def execution_agent_name(delegation: Delegation) -> str:
     return name
 
 
-def _default_router() -> DelegationRouter:
+def intent_of(follow_up: Optional[bool]) -> Optional[str]:
+    return None if follow_up is None else ("followup" if follow_up else "create")
+
+
+def _default_router() -> Tuple[DelegationRouter, CandidateProvider]:
     # ponytail: in-memory registry, cards learn only from instructions (no post-run entity
     # updates, no lifecycle maintenance). Persist the registry and feed run outcomes back
     # through AgentManager.observe() for production.
@@ -78,10 +95,15 @@ def _default_router() -> DelegationRouter:
     manager = AgentManager(model=get_chat_model("router"))
     ids = itertools.count(1)
 
-    def route(agent_name: str, instructions: str) -> Delegation:
+    def route(agent_name: str, instructions: str, follow_up: Optional[bool]) -> Delegation:
         decision = manager.route(RoutingRequest(request_id=f"req_{next(ids)}", now=datetime.now(),
-                                                instruction=instructions, name_hint=agent_name))
+                                                instruction=instructions, name_hint=agent_name,
+                                                intent=intent_of(follow_up)))
         return Delegation(decision.action, decision.agent_id or "", decision.agent_name or agent_name,
                           decision.clarify_question or "")
 
-    return route
+    def candidates(text: str) -> List[str]:
+        now = datetime.now()
+        return [c.card.render_card(now) for c in manager.index.search(text, now, k=5)]
+
+    return route, candidates
