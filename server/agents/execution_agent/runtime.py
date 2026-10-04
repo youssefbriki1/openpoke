@@ -2,8 +2,8 @@
 
 import inspect
 import json
-from typing import Dict, Any, List, Optional, Tuple
-from dataclasses import dataclass
+from typing import Dict, Any, List, Optional, Tuple, Set
+from dataclasses import dataclass, field
 
 from .agent import ExecutionAgent
 from .tools import get_tool_schemas, get_tool_registry
@@ -19,7 +19,96 @@ class ExecutionResult:
     success: bool
     response: str
     error: Optional[str] = None
-    tools_executed: List[str] = None
+    tools_executed: List[str] = field(default_factory=list)
+    observed_entities: List[str] = field(default_factory=list)
+    open_items_add: Dict[str, str] = field(default_factory=dict)
+    open_items_close: List[str] = field(default_factory=list)
+
+
+_RESOURCE_ENTITY_FIELDS = {
+    "thread_id": "thread",
+    "draft_id": "draft",
+    "message_id": "msg",
+    "trigger_id": "trigger",
+}
+
+
+def _resource_entities(tool_name: str, *values: Any) -> Set[str]:
+    """Extract stable resource ids from tool arguments/results, never their content."""
+    found: Set[str] = set()
+    trigger_tool = tool_name in {"createTrigger", "updateTrigger", "listTriggers"}
+
+    def visit(value: Any, depth: int = 0) -> None:
+        if depth > 12:
+            return
+        if isinstance(value, str):
+            stripped = value.strip()
+            if stripped.startswith(("{", "[")):
+                try:
+                    visit(json.loads(stripped), depth + 1)
+                except (json.JSONDecodeError, RecursionError):
+                    pass
+            return
+        if isinstance(value, dict):
+            if value.get("error"):
+                return
+            for key, item in value.items():
+                kind = _RESOURCE_ENTITY_FIELDS.get(str(key))
+                if kind and isinstance(item, (str, int)) and str(item).strip():
+                    found.add(f"{kind}:{str(item).strip()}")
+                elif key == "id" and trigger_tool and isinstance(item, (str, int)):
+                    found.add(f"trigger:{str(item).strip()}")
+                else:
+                    visit(item, depth + 1)
+        elif isinstance(value, (list, tuple)):
+            for item in value:
+                visit(item, depth + 1)
+
+    for value in values:
+        visit(value)
+    if tool_name == "gmail_create_draft" and values:
+        draft_id = _draft_result_id(values[-1])
+        if draft_id:
+            found.add(f"draft:{draft_id}")
+    return found
+
+
+def _draft_result_id(result: Any) -> Optional[str]:
+    """Read the draft id from either the normalized Gmail result or its data wrapper."""
+    if not isinstance(result, dict):
+        return None
+    for record in (result, result.get("data")):
+        if not isinstance(record, dict):
+            continue
+        draft_id = record.get("draft_id") or record.get("id")
+        if draft_id is not None and str(draft_id).strip():
+            return str(draft_id).strip()
+    return None
+
+
+def _obligation_changes(tool_name: str, arguments: Dict[str, Any], result: Any) -> Tuple[Dict[str, str], Set[str]]:
+    """Track reminders and drafts that should keep their workstream available."""
+    if not isinstance(result, dict) or result.get("error"):
+        return {}, set()
+    additions: Dict[str, str] = {}
+    closures: Set[str] = set()
+    if tool_name == "createTrigger" and result.get("trigger_id") is not None:
+        key = f"trigger:{result['trigger_id']}"
+        if result.get("status", "active") == "active":
+            additions[key] = "Scheduled reminder"
+    elif tool_name == "updateTrigger" and result.get("trigger_id") is not None:
+        key = f"trigger:{result['trigger_id']}"
+        if result.get("status") in {"paused", "completed"}:
+            closures.add(key)
+        else:
+            additions[key] = "Scheduled reminder"
+    elif tool_name == "gmail_create_draft":
+        draft_id = _draft_result_id(result)
+        if draft_id:
+            additions[f"draft:{draft_id}"] = "Email draft awaiting approval"
+    elif tool_name in {"gmail_execute_draft", "gmail_delete_draft"} and arguments.get("draft_id"):
+        closures.add(f"draft:{arguments['draft_id']}")
+    return additions, closures
 
 
 class ExecutionAgentRuntime:
@@ -42,13 +131,16 @@ class ExecutionAgentRuntime:
     # Main execution loop for running agent with LLM calls and tool execution
     async def execute(self, instructions: str) -> ExecutionResult:
         """Execute the agent with given instructions."""
+        tools_executed: List[str] = []
+        observed_entities: Set[str] = set()
+        open_items_add: Dict[str, str] = {}
+        open_items_close: Set[str] = set()
         try:
             # Build system prompt with history
             system_prompt = self.agent.build_system_prompt_with_history()
 
             # Start conversation with the instruction
             messages = [{"role": "user", "content": instructions}]
-            tools_executed: List[str] = []
             final_response: Optional[str] = None
 
             for iteration in range(self.MAX_TOOL_ITERATIONS):
@@ -102,6 +194,10 @@ class ExecutionAgentRuntime:
                     if success:
                         logger.info(f"[{self.agent.name}] Tool {tool_name} completed successfully")
                         record_payload = self._safe_json_dump(result)
+                        observed_entities.update(_resource_entities(tool_name, tool_args, result))
+                        added, closed = _obligation_changes(tool_name, tool_args, result)
+                        open_items_add.update(added)
+                        open_items_close.update(closed)
                     else:
                         error_detail = result.get("error") if isinstance(result, dict) else str(result)
                         logger.warning(f"[{self.agent.name}] Tool {tool_name} failed: {error_detail}")
@@ -132,7 +228,10 @@ class ExecutionAgentRuntime:
                 agent_name=self.agent.name,
                 success=True,
                 response=final_response,
-                tools_executed=tools_executed
+                tools_executed=tools_executed,
+                observed_entities=sorted(observed_entities),
+                open_items_add=open_items_add,
+                open_items_close=sorted(open_items_close),
             )
 
         except Exception as e:
@@ -145,7 +244,11 @@ class ExecutionAgentRuntime:
                 agent_name=self.agent.name,
                 success=False,
                 response=failure_text,
-                error=error_msg
+                error=error_msg,
+                tools_executed=tools_executed,
+                observed_entities=sorted(observed_entities),
+                open_items_add=open_items_add,
+                open_items_close=sorted(open_items_close),
             )
 
     # Execute OpenRouter API call with system prompt, messages, and optional tool schemas

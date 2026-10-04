@@ -17,16 +17,28 @@ TIER3_ROUTING_NOTE = (
     "to this message, not the full list. Call send_message_to_agent for every task, including follow-ups "
     "on earlier work. Write self-contained instructions: resolve pronouns and first names from the "
     "conversation and these agents, name people in full (e.g. 'Check whether Alice Chen replied about "
-    "lunch') and quote reminder, draft or thread ids. Set follow_up to true when the task continues "
-    "earlier work, false for a new task. agent_name is only the label of a new agent. If the result says "
-    "needs_clarification, ask the user that question."
+    "lunch') and quote reminder, draft or thread ids. Set follow_up to true whenever the task refers to "
+    "something that already exists (an email thread or draft, a reminder, a booking, an offer, a digest), "
+    "even if it was set up long ago and is not in the conversation; false only for brand-new work. "
+    "agent_name is only the label of a new agent. If the result says needs_clarification, ask the user "
+    "that question."
 )
+
+TIER3_SYSTEM_POLICY = """
+
+Tier 3 routing rules override earlier instructions to acknowledge the user before delegating or to split work broadly:
+- For one user goal, make one send_message_to_agent call. Split only distinct, independently actionable goals.
+- Set follow_up=true for work on an existing person, thread, draft, reminder, booking, or other item. Set it false for a clearly new item.
+- Use the conversation and candidate cards to include full names and exact thread, draft, or reminder IDs in instructions.
+- Do not ask the user to choose an agent yourself. Delegate first; relay a needs_clarification question returned by the manager.
+- For an execution-agent result, summarize the result to the user instead of delegating the completed work again.
+""".strip()
 
 
 # Load and return the pre-defined system prompt from markdown file
 def build_system_prompt() -> str:
     """Return the static system prompt for the interaction agent."""
-    return SYSTEM_PROMPT
+    return f"{SYSTEM_PROMPT}\n\n{TIER3_SYSTEM_POLICY}" if tier3_enabled() else SYSTEM_PROMPT
 
 
 # Build structured message with conversation history, active agents, and current turn

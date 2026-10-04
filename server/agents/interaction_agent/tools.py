@@ -9,7 +9,12 @@ from typing import Any, Optional
 from ...logging_config import logger
 from ...services.conversation import get_conversation_log
 from ...services.execution import get_agent_roster, get_execution_agent_logs
-from ...services.execution.agent_manager import execution_agent_name, route_delegation, tier3_enabled
+from ...services.execution.agent_manager import (
+    execution_agent_name,
+    record_execution_outcome,
+    route_delegation,
+    tier3_enabled,
+)
 from ..execution_agent.batch_manager import ExecutionBatchManager
 
 
@@ -124,6 +129,7 @@ _EXECUTION_BATCH_MANAGER = ExecutionBatchManager()
 # Create or reuse execution agent and dispatch instructions asynchronously
 def send_message_to_agent(agent_name: str, instructions: str, follow_up: Optional[bool] = None) -> ToolResult:
     """Send instructions to an execution agent."""
+    delegation = None
     if tier3_enabled():  # the Agent Manager decides reuse vs create, not the exact name
         delegation = route_delegation(agent_name, instructions, follow_up)
         if delegation.action == "clarify":
@@ -147,6 +153,8 @@ def send_message_to_agent(agent_name: str, instructions: str, follow_up: Optiona
         try:
             result = await _EXECUTION_BATCH_MANAGER.execute_agent(agent_name, instructions)
             status = "SUCCESS" if result.success else "FAILED"
+            if delegation is not None:
+                record_execution_outcome(delegation, instructions, result)
             logger.info(f"Agent '{agent_name}' completed: {status}")
         except Exception as exc:  # pragma: no cover - defensive
             logger.error(f"Agent '{agent_name}' failed: {str(exc)}")
