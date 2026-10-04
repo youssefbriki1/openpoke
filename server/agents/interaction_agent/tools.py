@@ -8,6 +8,7 @@ from typing import Any, Optional
 from ...logging_config import logger
 from ...services.conversation import get_conversation_log
 from ...services.execution import get_agent_roster, get_execution_agent_logs
+from ...services.execution.agent_manager import execution_agent_name, route_delegation, tier3_enabled
 from ..execution_agent.batch_manager import ExecutionBatchManager
 
 
@@ -111,6 +112,12 @@ _EXECUTION_BATCH_MANAGER = ExecutionBatchManager()
 # Create or reuse execution agent and dispatch instructions asynchronously
 def send_message_to_agent(agent_name: str, instructions: str) -> ToolResult:
     """Send instructions to an execution agent."""
+    if tier3_enabled():  # the Agent Manager decides reuse vs create, not the exact name
+        delegation = route_delegation(agent_name, instructions)
+        if delegation.action == "clarify":
+            return ToolResult(success=True, payload={"status": "needs_clarification", "ask_user": delegation.question})
+        agent_name = execution_agent_name(delegation)
+
     roster = get_agent_roster()
     roster.load()
     existing_agents = set(roster.get_agents())
