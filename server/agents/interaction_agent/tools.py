@@ -1,6 +1,7 @@
 """Tool definitions for interaction agent."""
 
 import asyncio
+import copy
 import json
 from dataclasses import dataclass
 from typing import Any, Optional
@@ -106,14 +107,25 @@ TOOL_SCHEMAS = [
     },
 ]
 
+# Tier 3 mode: the IA declares whether a delegation continues earlier work
+TIER3_TOOL_SCHEMAS = copy.deepcopy(TOOL_SCHEMAS)
+_delegate = TIER3_TOOL_SCHEMAS[0]["function"]
+_delegate["description"] = "Delegate a task. The Agent Manager reuses the agent that owns the work or creates a new one."
+_delegate["parameters"]["properties"]["follow_up"] = {
+    "type": "boolean",
+    "description": "true if the task continues earlier work (a reply, a draft, a reminder, a booking already "
+                   "discussed); false for a new task.",
+}
+_delegate["parameters"]["required"].append("follow_up")
+
 _EXECUTION_BATCH_MANAGER = ExecutionBatchManager()
 
 
 # Create or reuse execution agent and dispatch instructions asynchronously
-def send_message_to_agent(agent_name: str, instructions: str) -> ToolResult:
+def send_message_to_agent(agent_name: str, instructions: str, follow_up: Optional[bool] = None) -> ToolResult:
     """Send instructions to an execution agent."""
     if tier3_enabled():  # the Agent Manager decides reuse vs create, not the exact name
-        delegation = route_delegation(agent_name, instructions)
+        delegation = route_delegation(agent_name, instructions, follow_up)
         if delegation.action == "clarify":
             return ToolResult(success=True, payload={"status": "needs_clarification", "ask_user": delegation.question})
         agent_name = execution_agent_name(delegation)
@@ -218,7 +230,7 @@ def wait(reason: str) -> ToolResult:
 # Return predefined tool schemas for LLM function calling
 def get_tool_schemas():
     """Return OpenAI-compatible tool schemas."""
-    return TOOL_SCHEMAS
+    return TIER3_TOOL_SCHEMAS if tier3_enabled() else TOOL_SCHEMAS
 
 
 # Route tool calls to appropriate handlers with argument validation and error handling
