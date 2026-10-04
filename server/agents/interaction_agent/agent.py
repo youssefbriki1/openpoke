@@ -1,22 +1,25 @@
 """Interaction agent helpers for prompt construction."""
 
+import re
 from html import escape
 from pathlib import Path
 from typing import Dict, List
 
 from ...services.execution import get_agent_roster
-from ...services.execution.agent_manager import tier3_enabled
+from ...services.execution.agent_manager import relevant_agents, tier3_enabled
 
 _prompt_path = Path(__file__).parent / "system_prompt.md"
 SYSTEM_PROMPT = _prompt_path.read_text(encoding="utf-8").strip()
 
 # Shown instead of the roster when the Agent Manager routes delegations (OPENPOKE_ROUTER=tier3)
 TIER3_ROUTING_NOTE = (
-    "Agents are routed automatically by the Agent Manager, so no roster is listed. Always call "
-    "send_message_to_agent with self-contained instructions that name the people, email threads, "
-    "bookings or reminders involved (e.g. 'Check whether Alice Chen replied about lunch'). The "
-    "manager reuses the agent that already owns that work or creates a new one; agent_name is only "
-    "the label of a new agent. If the result says needs_clarification, ask the user that question."
+    "Agents are routed automatically by the Agent Manager. Below are only the few agents most relevant "
+    "to this message, not the full list. Call send_message_to_agent for every task, including follow-ups "
+    "on earlier work. Write self-contained instructions: resolve pronouns and first names from the "
+    "conversation and these agents, name people in full (e.g. 'Check whether Alice Chen replied about "
+    "lunch') and quote reminder, draft or thread ids. Set follow_up to true when the task continues "
+    "earlier work, false for a new task. agent_name is only the label of a new agent. If the result says "
+    "needs_clarification, ask the user that question."
 )
 
 
@@ -36,7 +39,7 @@ def prepare_message_with_history(
     sections: List[str] = []
 
     sections.append(_render_conversation_history(transcript))
-    sections.append(f"<active_agents>\n{_render_active_agents()}\n</active_agents>")
+    sections.append(f"<active_agents>\n{_render_active_agents(latest_text, transcript)}\n</active_agents>")
     sections.append(_render_current_turn(latest_text, message_type))
 
     content = "\n\n".join(sections)
@@ -52,9 +55,11 @@ def _render_conversation_history(transcript: str) -> str:
 
 
 # Format currently active execution agents into XML tags for LLM awareness
-def _render_active_agents() -> str:
+def _render_active_agents(latest_text: str = "", transcript: str = "") -> str:
     if tier3_enabled():
-        return TIER3_ROUTING_NOTE
+        recent = re.sub(r"<[^>]+>", " ", transcript[-600:])  # last turns, without log tags
+        cards = relevant_agents(f"{recent} {latest_text}")
+        return "\n".join([TIER3_ROUTING_NOTE, *cards])
 
     roster = get_agent_roster()
     roster.load()
