@@ -113,8 +113,8 @@ _delegate = TIER3_TOOL_SCHEMAS[0]["function"]
 _delegate["description"] = "Delegate a task. The Agent Manager reuses the agent that owns the work or creates a new one."
 _delegate["parameters"]["properties"]["follow_up"] = {
     "type": "boolean",
-    "description": "true if the task continues earlier work (a reply, a draft, a reminder, a booking already "
-                   "discussed); false for a new task.",
+    "description": "true if the task refers to something that already exists (an email thread or draft, a "
+                   "reminder, a booking, an offer, a digest), even if set up long ago; false only for brand-new work.",
 }
 _delegate["parameters"]["required"].append("follow_up")
 
