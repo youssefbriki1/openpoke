@@ -29,7 +29,7 @@ class Delegation:
 
 # (agent_name proposed by the IA, instructions, follow_up declared by the IA) -> Delegation
 DelegationRouter = Callable[[str, str, Optional[bool]], Delegation]
-# text of the current turn -> rendered cards of the agents most relevant to it
+# text of the current turn -> the agents most relevant to it, rendered as <agent name=... ids=... />
 CandidateProvider = Callable[[str], List[str]]
 
 _router: Optional[DelegationRouter] = None
@@ -60,7 +60,7 @@ def route_delegation(agent_name: str, instructions: str, follow_up: Optional[boo
 
 
 def relevant_agents(text: str) -> List[str]:
-    """Cards of the few agents most relevant to ``text`` (shown to the IA instead of the roster)."""
+    """The few agents most relevant to ``text`` (shown to the IA instead of the roster)."""
     _ensure_router()
     return _candidates(text) if _candidates else []
 
@@ -92,7 +92,7 @@ def _default_router() -> Tuple[DelegationRouter, CandidateProvider]:
     from overload.routing.base import RoutingRequest
     from overload.routing.tier3 import AgentManager
 
-    manager = AgentManager(model=get_chat_model("router"))
+    manager = AgentManager(model=get_chat_model("router"), verify_names=True)
     ids = itertools.count(1)
 
     def route(agent_name: str, instructions: str, follow_up: Optional[bool]) -> Delegation:
@@ -104,6 +104,6 @@ def _default_router() -> Tuple[DelegationRouter, CandidateProvider]:
 
     def candidates(text: str) -> List[str]:
         now = datetime.now()
-        return [c.card.render_card(now) for c in manager.index.search(text, now, k=5)]
+        return [c.card.render_ref() for c in manager.index.search(text, now, k=5)]
 
     return route, candidates

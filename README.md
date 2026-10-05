@@ -75,7 +75,7 @@ The web app proxies API calls to the Python server using the values in `.env`, s
 
 ## Tier 3 routing (optional)
 
-This fork can hand agent routing to the Agent Manager from [openpoke-agent-overload](https://github.com/youssefbriki1/openpoke-agent-overload). The Interaction Agent then sees only the 5 agents most relevant to the current message instead of every agent's name. It writes self-contained instructions and declares with `follow_up` whether a task continues earlier work. The manager reuses the agent that owns the people, threads or reminders a task mentions, creates a new agent, or asks the user which person they meant.
+This fork can hand agent routing to the Agent Manager from [openpoke-agent-overload](https://github.com/youssefbriki1/openpoke-agent-overload). The Interaction Agent then sees only the 5 agents most relevant to the current message (name and reminder, draft or thread ids) instead of every agent's name. It writes self-contained instructions, declares with `follow_up` whether a task continues earlier work, and delegates instead of asking the user which person or draft they mean. The manager reuses the agent that owns the people, threads or reminders a task mentions, creates a new agent, or asks the user which person they meant.
 
 ```bash
 pip install -e ..            # from the openpoke-agent-overload checkout this fork is a submodule of
